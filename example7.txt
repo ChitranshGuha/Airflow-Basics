@@ -1,0 +1,48 @@
+1. The Easy Route: Built-in Email AlertsAirflow has native email support built right in. If your infrastructure administrator has configured an SMTP server in your airflow.cfg file, you don't even need to write a custom callback. You just add three parameters to your default_args:Pythondefault_args = {
+    'owner': 'platform_team',
+    'retries': 2,
+    # Native email configuration
+    'email': ['data-team@mycompany.com'],
+    'email_on_failure': True,
+    'email_on_retry': False 
+}
+Any task that fails in this DAG will automatically send an email with the task ID, execution time, and a direct link to the logs.2. The Custom Route: Slack Alerts (Callbacks)To send alerts to modern tools like Slack, Microsoft Teams, or PagerDuty, you write a custom function and attach it to the on_failure_callback parameter.When a task fails, Airflow passes the "context" dictionary (the same one that holds your Jinja {{ ds }} variable and the XCom ti object) into your function so you can extract exactly what went wrong.Here is how you set up a Slack failure alert:Pythonfrom airflow.providers.slack.hooks.slack_webhook import SlackWebhookHook
+
+# 1. Define the callback function
+def send_slack_alert(context):
+    # Extract details from the failed task's context
+    task_id = context.get('task_instance').task_id
+    dag_id = context.get('task_instance').dag_id
+    log_url = context.get('task_instance').log_url
+    
+    message = f"🚨 Task *{task_id}* failed in DAG *{dag_id}*!\nCheck logs here: {log_url}"
+    
+    # 2. Send the message using a Hook (requires a Slack connection saved in the UI)
+    slack_hook = SlackWebhookHook(slack_webhook_conn_id='slack_alerts_connection')
+    slack_hook.send_text(text=message)
+
+# 3. Attach it to your default_args so it applies to every task
+default_args = {
+    'owner': 'platform_team',
+    'on_failure_callback': send_slack_alert
+}
+3. Service Level Agreements (SLAs)A failure alert tells you if a task crashed. An SLA alert tells you if a task is taking too long to finish.SLAs are time limits you place on tasks relative to the start of the DAG run. If a task hasn't completed by that time limit, Airflow triggers a specific sla_miss_callback.Pythonfrom datetime import timedelta
+
+# The SLA callback receives different arguments than a standard failure callback
+def sla_miss_alert(dag, task_list, blocking_task_list, slas, blocking_tis):
+    print(f"SLA missed for tasks: {task_list}")
+    # You could instantiate your Slack Hook here to send an alert!
+
+default_args = {
+    'owner': 'platform_team',
+    # 1. Set the time limit (e.g., this task must finish within 2 hours of DAG start)
+    'sla': timedelta(hours=2),
+}
+
+with DAG(
+    dag_id='warehouse_sync_pipeline',
+    default_args=default_args,
+    # 2. Attach the callback to the DAG itself
+    sla_miss_callback=sla_miss_alert
+) as dag:
+    # Tasks go here...
